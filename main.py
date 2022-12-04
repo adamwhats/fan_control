@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from csv import reader
 from typing import Generator, Tuple, List
@@ -28,7 +29,7 @@ def init() -> Tuple[Generator, np.ndarray, np.ndarray]:
 
     # Initialise fan curve
     logging.info("Initialising fan curve:")
-    with open('fan_curve.csv', 'r') as file:
+    with open(os.path.join(os.path.dirname(__file__), 'fan_curve.csv'), 'r') as file:
         rows = reader(file, delimiter=',')
         temp, duty = [], []
         for row in rows:
