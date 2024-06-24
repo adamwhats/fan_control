@@ -1,18 +1,19 @@
+import csv
 import logging
 import os
 import time
-from csv import reader
-from typing import Generator, Tuple, List
+from typing import Any, Tuple
 
 import numpy as np
 from liquidctl import find_liquidctl_devices
 from psutil import sensors_temperatures
 
 
-def init() -> Tuple[Generator, np.ndarray, np.ndarray]:
-    # Initialise fans
+def init_fans() -> Tuple[Any] | None:
+    """Initialise the fans"""
     logging.info("Initialising liquidctl devices:")
     devices = find_liquidctl_devices()
+    fans = []
     for dev in devices:
         with dev.connect():
             try:
@@ -20,51 +21,49 @@ def init() -> Tuple[Generator, np.ndarray, np.ndarray]:
                 if init_output:
                     for k, v, unit in init_output:
                         logging.info(f"- {k}: {v} {unit}")
+                    fans.append(dev)
                 else:
-                    raise logging.error(
-                        f"Error initialising {dev.description} at {dev.bus}:{dev.address}")
+                    logging.error(
+                        f"Error initialising {dev.description} at {dev.bus}:{dev.address}"
+                    )
             except AssertionError as ex:
-                logging.error(f"{str(ex)}, could not access devices")
-                pass
+                logging.error(f"{ex}, could not access device")
+    if fans:
+        return tuple(fans)
+    return None
 
-    # Initialise fan curve
+
+def load_fan_curve() -> np.ndarray:
+    """Load the fan curve defined at `./fan_curve.csv`. Returns as a 2xN numpy array where the
+    first column is temprature and the second is fan duty"""
     logging.info("Initialising fan curve:")
-    with open(os.path.join(os.path.dirname(__file__), 'fan_curve.csv'), 'r') as file:
-        rows = reader(file, delimiter=',')
-        temp, duty = [], []
-        for row in rows:
-            temp.append(row[0]), duty.append(row[1])
-        logging.info(f"- Temp (°C): {[str(t).rjust(3) for t in temp]}")
-        logging.info(f"- Duty  (%): {[str(d).rjust(3) for d in duty]}")
-        temp = np.array(temp, dtype=np.float32)
-        duty = np.array(duty, dtype=np.float32)
-
-    return temp, duty
-
-
-def set_fan_duty(duty: int) -> None:
-    devices = find_liquidctl_devices()
-    for dev in devices:
-        with dev.connect():
-            for channel in list(dev._speed_channels.keys()):
-                dev.set_fixed_speed(channel, duty)
+    curve_path = os.path.join(os.path.dirname(__file__), "fan_curve.csv")
+    with open(curve_path, "r", encoding="utf-8") as file:
+        rows = csv.reader(file, delimiter=",")
+        curve = np.vstack([[float(r[0]), float(r[1])] for r in rows], dtype=np.float32)
+    logging.info(f"Loaded fan curve with {curve.shape[0]} temp/duty pairs \n{curve}")
+    return curve
 
 
 def main():
     logging.basicConfig(level=logging.INFO)
-    logging.info('Started')
-    curve_t, curve_d = init()
+    logging.info("Started")
+    init_fans()
+    curve = load_fan_curve()
     while True:
         try:
-            cpu_temp = sensors_temperatures()['coretemp'][0].current
-            duty = int(np.interp(cpu_temp, curve_t, curve_d))
+            cpu_temp = sensors_temperatures()["coretemp"][0].current
+            duty = int(np.interp(cpu_temp, curve[:, 0], curve[:, 1]))
             logging.info(f"Temp: {cpu_temp}, Fan duty: {duty}")
-            set_fan_duty(duty)
+            for dev in find_liquidctl_devices():
+                with dev.connect():
+                    for channel in list(dev._speed_channels.keys()):
+                        dev.set_fixed_speed(channel, duty)
             time.sleep(2)
         except KeyboardInterrupt as ex:
             logging.info(f"{str(ex)}, Stopping script")
             break
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
